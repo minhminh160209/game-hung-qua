@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Game Hứng Hoa Quả</title>
+<style>
+  /* Reset toàn bộ margin/padding, chống cuộn trang trên di động */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: linear-gradient(180deg, #87CEEB 0%, #B0E0E6 50%, #98FB98 100%);
+    font-family: Arial, sans-serif;
+    touch-action: none;
+  }
+  /* Khung canvas chính giữa màn hình */
+  #gameCanvas {
+    display: block;
+    margin: 0 auto;
+    background: linear-gradient(180deg, #a8e6ff 0%, #d4f5ff 60%, #c8f7c5 100%);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    touch-action: none;
+  }
+  /* Lớp phủ hiển thị điểm và thời gian */
+  #hud {
+    position: fixed;
+    top: 10px; left: 0; right: 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 20px;
+    font-size: 20px;
+    font-weight: bold;
+    color: #2c3e50;
+    text-shadow: 0 1px 2px #fff;
+    pointer-events: none;
+    z-index: 10;
+  }
+  /* Màn hình bắt đầu / kết thúc */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.85);
+    z-index: 20;
+    text-align: center;
+    padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h1 {
+    font-size: 28px;
+    color: #e67e22;
+    margin-bottom: 12px;
+  }
+  #overlay p {
+    font-size: 16px;
+    color: #34495e;
+    margin-bottom: 20px;
+    max-width: 320px;
+    line-height: 1.5;
+  }
+  #overlay button {
+    padding: 14px 36px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #fff;
+    background: linear-gradient(180deg, #ff9a3c, #ff6b1a);
+    border: none;
+    border-radius: 30px;
+    box-shadow: 0 4px 12px rgba(255,107,26,0.4);
+    cursor: pointer;
+  }
+  #overlay button:active { transform: scale(0.96); }
+</style>
+</head>
+<body>
+
+<!-- Lớp hiển thị điểm số và thời gian -->
+<div id="hud">
+  <span>Điểm: <span id="score">0</span></span>
+  <span>Thời gian: <span id="timer">30</span>s</span>
+</div>
+
+<!-- Canvas game -->
+<canvas id="gameCanvas"></canvas>
+
+<!-- Lớp phủ bắt đầu / kết thúc -->
+<div id="overlay">
+  <h1 id="overlayTitle">🍎 Hứng Hoa Quả 🍌</h1>
+  <p id="overlayText">Di chuyển giỏ bằng cách chạm và kéo ngón tay trên màn hình. Hứng hoa quả rơi xuống trong 30 giây!</p>
+  <button id="startBtn">Bắt đầu</button>
+</div>
+
+<script>
+/* ============================================================
+   CẤU HÌNH CHUNG
+   ============================================================ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const timerEl = document.getElementById('timer');
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const overlayText = document.getElementById('overlayText');
+const startBtn = document.getElementById('startBtn');
+
+// Điều chỉnh kích thước canvas theo cửa sổ trình duyệt, giữ tỉ lệ hợp lý cho di động
+function resizeCanvas() {
+  const maxW = Math.min(window.innerWidth - 16, 480);
+  const maxH = Math.min(window.innerHeight - 80, 720);
+  canvas.width = maxW;
+  canvas.height = maxH;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+/* ============================================================
+   TRẠNG THÁI GAME
+   ============================================================ */
+let gameState = 'idle';      // 'idle' | 'playing' | 'over'
+let score = 0;
+let timeLeft = 30;           // Tổng thời gian màn chơi (giây)
+let lastTime = 0;
+let spawnTimer = 0;          // Bộ đếm thời gian để sinh hoa quả
+let spawnInterval = 700;     // Khoảng cách giữa các lần sinh hoa quả (ms)
+let basketX = 0;             // Tọa độ X của giỏ
+let basketTargetX = 0;       // Tọa độ đích để giỏ mượt mà di chuyển
+const basketWidth = 90;
+const basketHeight = 24;
+const basketSpeed = 0.25;    // Hệ số nội suy giỏ (0-1)
+
+/* ============================================================
+   ĐỐI TƯỢNG HOA QUẢ
+   Sử dụng emoji làm hình ảnh, không cần tải asset ngoài
+   ============================================================ */
+const fruitTypes = [
+  { emoji: '🍎', points: 10, color: '#e74c3c' },
+  { emoji: '🍌', points: 10, color: '#f1c40f' },
+  { emoji: '🍇', points: 10, color: '#9b59b6' },
+  { emoji: '🍓', points: 15, color: '#e91e63' },
+  { emoji: '🍊', points: 10, color: '#e67e22' },
+  { emoji: '🍉', points: 20, color: '#2ecc71' },
+  { emoji: '🍑', points: 15, color: '#ffb6c1' },
+  { emoji: '🥝', points: 15, color: '#7cb342' },
+  { emoji: '🍍', points: 20, color: '#f39c12' },
+];
+
+let fruits = [];             // Mảng chứa các quả đang rơi
+
+/* ============================================================
+   HIỆU ỨNG ĐIỂM SỐ BAY LÊN (floating text)
+   ============================================================ */
+let floatTexts = [];         // Mảng chứa các hiệu ứng điểm
+
+/* ============================================================
+   XỬ LÝ NHẬP LIỆU - DI CHUYỂN GIỎ
+   Hỗ trợ cảm ứng (touch) và chuột (mouse)
+   ============================================================ */
+function handlePointerMove(clientX) {
+  if (gameState !== 'playing') return;
+  // Lấy tọa độ tương đối so với canvas
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  // Giới hạn trong biên canvas
+  basketTargetX = Math.max(0, Math.min(canvas.width - basketWidth, x - basketWidth / 2));
+}
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (e.touches.length > 0) handlePointerMove(e.touches[0].clientX);
+}, { passive: false });
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (e.touches.length > 0) handlePointerMove(e.touches[0].clientX);
+}, { passive: false });
+
+canvas.addEventListener('mousemove', (e) => {
+  handlePointerMove(e.clientX);
+});
+
+/* ============================================================
+   SINH HOA QUẢ MỚI
+   ============================================================ */
+function spawnFruit() {
+  const type = fruitTypes[Math.floor(Math.random() * fruitTypes.length)];
+  const radius = 22;
+  const x = radius + Math.random() * (canvas.width - radius * 2);
+  const speed = 150 + Math.random() * 120 + (30 - timeLeft) * 3; // Tăng tốc theo thời gian
+  fruits.push({
+    x: x,
+    y: -radius,
+    radius: radius,
+    speed: speed,            // px/giây
+    emoji: type.emoji,
+    points: type.points,
+    color: type.color,
+    rotation: (Math.random() - 0.5) * 0.05,
+    angle: 0
+  });
+}
+
+/* ============================================================
+   VẼ GIỎ
+   ============================================================ */
+function drawBasket() {
+  const x = basketX;
+  const y = canvas.height - basketHeight - 10;
+
+  // Thân giỏ hình thang
+  ctx.fillStyle = '#d35400';
+  ctx.beginPath();
+  ctx.moveTo(x + 6, y);
+  ctx.lineTo(x + basketWidth - 6, y);
+  ctx.lineTo(x + basketWidth, y + basketHeight);
+  ctx.lineTo(x, y + basketHeight);
+  ctx.closePath();
+  ctx.fill();
+
+  // Viền giỏ
+  ctx.strokeStyle = '#a04000';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // Vân giỏ (các đường dọc)
+  ctx.strokeStyle = '#e67e22';
+  ctx.lineWidth = 2;
+  for (let i = 1; i < 6; i++) {
+    const px = x + (basketWidth / 6) * i;
+    ctx.beginPath();
+    ctx.moveTo(px, y + 4);
+    ctx.lineTo(px + (i < 3 ? -2 : 2), y + basketHeight - 4);
+    ctx.stroke();
+  }
+
+  // Đường ngang giữa giỏ
+  ctx.strokeStyle = '#a04000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + 3, y + basketHeight / 2);
+  ctx.lineTo(x + basketWidth - 3, y + basketHeight / 2);
+  ctx.stroke();
+}
+
+/* ============================================================
+   VẼ HOA QUẢ (dùng emoji, xoay nhẹ cho sinh động)
+   ============================================================ */
+function drawFruit(f) {
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.rotate(f.angle);
+  ctx.font = `${f.radius * 2}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // Đổ bóng nhẹ cho quả nổi bật
+  ctx.shadowColor = 'rgba(0,0,0,0.15)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
+  ctx.fillText(f.emoji, 0, 0);
+  ctx.restore();
+}
+
+/* ============================================================
+   VẼ HIỆU ỨNG ĐIỂM BAY LÊN
+   ============================================================ */
+function drawFloatTexts() {
+  for (const t of floatTexts) {
+    ctx.save();
+    ctx.globalAlpha = t.life / t.maxLife;
+    ctx.font = 'bold 22px Arial';
+    ctx.fillStyle = t.color;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeText(t.text, t.x, t.y);
+    ctx.fillText(t.text, t.x, t.y);
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   VẼ NỀN TRANG TRÍ (mây, mặt trời - tạo cảm giác tươi sáng)
+   ============================================================ */
+function drawBackground() {
+  // Mặt trời góc trên phải
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  const sunX = canvas.width - 60;
+  const sunY = 60;
+  const sunGrad = ctx.createRadialGradient(sunX, sunY, 10, sunX, sunY, 60);
+  sunGrad.addColorStop(0, '#fff9c4');
+  sunGrad.addColorStop(1, 'rgba(255,249,196,0)');
+  ctx.fillStyle = sunGrad;
+  ctx.beginPath();
+  ctx.arc(sunX, sunY, 60, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Vài đám mây trắng mờ
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = '#ffffff';
+  drawCloud(60, 90, 30);
+  drawCloud(180, 140, 22);
+  drawCloud(320, 70, 26);
+  ctx.restore();
+}
+
+function drawCloud(x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.arc(x + r * 0.9, y - r * 0.3, r * 0.8, 0, Math.PI * 2);
+  ctx.arc(x + r * 1.7, y, r * 0.9, 0, Math.PI * 2);
+  ctx.arc(x + r * 0.8, y + r * 0.4, r * 0.7, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* ============================================================
+   CẬP NHẬT LOGIC MỖI KHUNG HÌNH
+   ============================================================ */
+function update(dt) {
+  if (gameState !== 'playing') return;
+
+  // Cập nhật thời gian đếm ngược
+  timeLeft -= dt;
+  if (timeLeft <= 0) {
+    timeLeft = 0;
+    endGame();
+    return;
+  }
+  timerEl.textContent = Math.ceil(timeLeft);
+
+  // Nội suy giỏ về vị trí đích (mượt mà)
+  basketX += (basketTargetX - basketX) * basketSpeed;
+  if (basketX < 0) basketX = 0;
+  if (basketX > canvas.width - basketWidth) basketX = canvas.width - basketWidth;
+
+  // Sinh hoa quả theo chu kỳ
+  spawnTimer += dt * 1000;
+  // Tăng dần tần suất sinh quả khi gần hết giờ
+  const currentInterval = Math.max(300, spawnInterval - (30 - timeLeft) * 12);
+  if (spawnTimer >= currentInterval) {
+    spawnTimer = 0;
+    spawnFruit();
+  }
+
+  // Cập nhật vị trí hoa quả
+  const basketTop = canvas.height - basketHeight - 10;
+  for (let i = fruits.length - 1; i >= 0; i--) {
+    const f = fruits[i];
+    f.y += f.speed * dt;
+    f.angle += f.rotation;
+
+    // Kiểm tra va chạm với giỏ
+    const hitX = f.x > basketX - f.radius * 0.4 && f.x < basketX + basketWidth + f.radius * 0.4;
+    const hitY = f.y + f.radius > basketTop && f.y - f.radius < basketTop + basketHeight;
+
+    if (hitX && hitY) {
+      // Hứng thành công
+      score += f.points;
+      scoreEl.textContent = score;
+      floatTexts.push({
+        x: f.x, y: f.y,
+        text: '+' + f.points,
+        color: f.color,
+        life: 1.0, maxLife: 1.0
+      });
+      fruits.splice(i, 1);
+      continue;
+    }
+
+    // Xóa quả khi rơi ra khỏi màn hình
+    if (f.y - f.radius > canvas.height) {
+      fruits.splice(i, 1);
+    }
+  }
+
+  // Cập nhật hiệu ứng điểm bay
+  for (let i = floatTexts.length - 1; i >= 0; i--) {
+    const t = floatTexts[i];
+    t.y -= 40 * dt;
+    t.life -= dt;
+    if (t.life <= 0) floatTexts.splice(i, 1);
+  }
+}
+
+/* ============================================================
+   VẼ TOÀN BỘ KHUNG HÌNH
+   ============================================================ */
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBackground();
+
+  // Vẽ hoa quả
+  for (const f of fruits) drawFruit(f);
+
+  // Vẽ giỏ
+  drawBasket();
+
+  // Vẽ hiệu ứng điểm
+  drawFloatTexts();
+}
+
+/* ============================================================
+   VÒNG LẶP GAME (requestAnimationFrame)
+   ============================================================ */
+function loop(timestamp) {
+  if (!lastTime) lastTime = timestamp;
+  let dt = (timestamp - lastTime) / 1000; // Đổi sang giây
+  lastTime = timestamp;
+  // Giới hạn dt để tránh bước nhảy lớn khi tab bị ẩn
+  if (dt > 0.1) dt = 0.1;
+
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* ============================================================
+   BẮT ĐẦU / KẾT THÚC GAME
+   ============================================================ */
+function startGame() {
+  gameState = 'playing';
+  score = 0;
+  timeLeft = 30;
+  spawnTimer = 0;
+  fruits = [];
+  floatTexts = [];
+  basketX = canvas.width / 2 - basketWidth / 2;
+  basketTargetX = basketX;
+  scoreEl.textContent = '0';
+  timerEl.textContent = '30';
+  overlay.classList.add('hidden');
+  lastTime = 0;
+}
+
+function endGame() {
+  gameState = 'over';
+  overlayTitle.textContent = '⏰ Hết giờ!';
+  overlayText.innerHTML = `Bạn đạt được <b style="color:#e67e22;font-size:24px">${score}</b> điểm.<br>Chơi lại để phá kỷ lục!`;
+  startBtn.textContent = 'Chơi lại';
+  overlay.classList.remove('hidden');
+}
+
+/* ============================================================
+   KHỞI TẠO
+   ============================================================ */
+startBtn.addEventListener('click', () => {
+  startGame();
+});
+
+// Thiết lập vị trí giỏ ban đầu
+basketX = canvas.width / 2 - basketWidth / 2;
+basketTargetX = basketX;
+
+// Khởi động vòng lặp game
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
